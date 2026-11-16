@@ -1,0 +1,97 @@
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.api.deps import get_current_user, get_db
+from app.models.user import User
+from app.schemas.chat import (
+    ConversationCreate,
+    ConversationListItem,
+    ConversationRead,
+    ConversationUpdate,
+)
+from app.services.conversation_service import ConversationService
+
+router = APIRouter()
+
+
+@router.get("", response_model=List[ConversationListItem])
+async def list_chats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List current user's conversations."""
+    conversations = await ConversationService.list_conversations(
+        db, user_id=current_user.id, limit=limit, offset=offset
+    )
+    return conversations
+
+
+@router.post("", response_model=ConversationRead, status_code=status.HTTP_201_CREATED)
+async def create_chat(
+    payload: ConversationCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new conversation thread."""
+    conversation = await ConversationService.create_conversation(
+        db, user_id=current_user.id, title=payload.title or "New Conversation"
+    )
+    return conversation
+
+
+@router.get("/{chat_id}", response_model=ConversationRead)
+async def get_chat(
+    chat_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get chat and messages, enforcing user ownership."""
+    conversation = await ConversationService.get_conversation(
+        db, conversation_id=chat_id, user_id=current_user.id
+    )
+    if not conversation:
+        # Return 404 to avoid IDOR enumeration
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return conversation
+
+
+@router.patch("/{chat_id}", response_model=ConversationRead)
+async def rename_chat(
+    chat_id: str,
+    payload: ConversationUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rename a conversation."""
+    conversation = await ConversationService.rename_conversation(
+        db, conversation_id=chat_id, user_id=current_user.id, new_title=payload.title
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return conversation
+
+
+@router.delete("/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_chat(
+    chat_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a conversation."""
+    success = await ConversationService.delete_conversation(
+        db, conversation_id=chat_id, user_id=current_user.id
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return None

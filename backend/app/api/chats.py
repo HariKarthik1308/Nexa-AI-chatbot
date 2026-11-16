@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
+from app.core.rate_limit import rate_limit
 from app.llm.base import (
     LLMAuthError,
     LLMError,
@@ -112,6 +113,7 @@ async def delete_chat(
     "/{chat_id}/messages",
     response_model=MessageRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(max_requests=30, window_seconds=60, key_prefix="chat_msg"))],
 )
 async def send_chat_message(
     chat_id: str,
@@ -144,7 +146,10 @@ async def send_chat_message(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
 
 
-@router.post("/{chat_id}/messages/stream")
+@router.post(
+    "/{chat_id}/messages/stream",
+    dependencies=[Depends(rate_limit(max_requests=30, window_seconds=60, key_prefix="chat_stream"))],
+)
 async def stream_chat_message(
     chat_id: str,
     payload: MessageCreateRequest,

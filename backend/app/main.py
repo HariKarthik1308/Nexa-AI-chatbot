@@ -4,13 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api.api_v1 import api_router
 from app.core.config import settings
+from app.core.logging import setup_secure_logging
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
-# Setup logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("nexa_ai")
+# Setup secure logging with automatic credential redaction
+logger = setup_secure_logging(settings.LOG_LEVEL)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,13 +19,17 @@ app = FastAPI(
     redoc_url=f"{settings.API_V1_STR}/redoc",
 )
 
-# CORS Configuration
+# 1. Security Headers Middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 2. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Type", "Retry-After"],
 )
 
 # Global Exception Handler

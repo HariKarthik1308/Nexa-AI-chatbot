@@ -9,13 +9,19 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.core.rate_limit import rate_limit
 from app.models.user import User
 from app.schemas.user import LoginRequest, Token, UserCreate, UserRead
 
 router = APIRouter()
 
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(max_requests=10, window_seconds=60, key_prefix="auth_register"))],
+)
 async def register(
     payload: UserCreate,
     response: Response,
@@ -60,7 +66,11 @@ async def register(
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post(
+    "/login",
+    response_model=Token,
+    dependencies=[Depends(rate_limit(max_requests=10, window_seconds=60, key_prefix="auth_login"))],
+)
 async def login(
     payload: LoginRequest,
     response: Response,

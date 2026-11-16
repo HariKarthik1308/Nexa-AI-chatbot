@@ -1,5 +1,6 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.llm.base import (
@@ -141,4 +142,35 @@ async def send_chat_message(
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=exc.message)
     except LLMError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
+
+
+@router.post("/{chat_id}/messages/stream")
+async def stream_chat_message(
+    chat_id: str,
+    payload: MessageCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream LLM response chunk-by-chunk using Server-Sent Events (SSE)."""
+    generator = ChatService.stream_message(
+        db=db,
+        conversation_id=chat_id,
+        user_id=current_user.id,
+        content=payload.content,
+        provider_name=payload.provider,
+        model_name=payload.model,
+        request=request,
+    )
+
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 

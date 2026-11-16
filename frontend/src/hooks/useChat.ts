@@ -6,6 +6,11 @@ import {
   INITIAL_MESSAGES,
   streamMockResponse,
 } from '../services/mockChatService';
+import {
+  checkBackendHealth,
+  createBackendConversation,
+} from '../services/api';
+import { streamBackendMessage } from '../services/streaming';
 
 export function useChat() {
   const [conversations, setConversations] = useState<Conversation[]>(INITIAL_CONVERSATIONS);
@@ -16,18 +21,28 @@ export function useChat() {
   const [selectedModel, setSelectedModel] = useState<ModelOption>(AVAILABLE_MODELS[0]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isBackendOnline, setIsBackendOnline] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Probe backend health on mount
+  useEffect(() => {
+    let mounted = true;
+    checkBackendHealth().then((online) => {
+      if (mounted) setIsBackendOnline(online);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const activeMessages = activeConversationId ? messagesMap[activeConversationId] || [] : [];
 
-  // Filtered conversations based on search
   const filteredConversations = conversations.filter((conv) =>
     conv.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const createNewChat = useCallback(() => {
-    // If currently streaming, stop it first
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       setIsStreaming(false);
@@ -57,7 +72,11 @@ export function useChat() {
   const renameConversation = useCallback((id: string, newTitle: string) => {
     if (!newTitle.trim()) return;
     setConversations((prev) =>
-      prev.map((conv) => (conv.id === id ? { ...conv, title: newTitle.trim(), updatedAt: new Date().toISOString() } : conv))
+      prev.map((conv) =>
+        conv.id === id
+          ? { ...conv, title: newTitle.trim(), updatedAt: new Date().toISOString() }
+          : conv
+      )
     );
   }, []);
 
@@ -182,33 +201,96 @@ export function useChat() {
 
       try {
         let accumulated = '';
-        for await (const chunk of streamMockResponse(trimmed, selectedModel, controller.signal)) {
-          if (controller.signal.aborted) break;
-          accumulated += chunk;
-          setMessagesMap((prev) => {
-            const list = prev[convId!] || [];
-            return {
-              ...prev,
-              [convId!]: list.map((msg) =>
-                msg.id === assistantMessageId ? { ...msg, content: accumulated } : msg
-              ),
-            };
-          });
-        }
 
-        // Finalize completed message
-        if (!controller.signal.aborted) {
-          setMessagesMap((prev) => {
-            const list = prev[convId!] || [];
-            return {
-              ...prev,
-              [convId!]: list.map((msg) =>
-                msg.id === assistantMessageId
-                  ? { ...msg, status: 'complete' as const, content: accumulated }
-                  : msg
-              ),
-            };
-          });
+        // If backend is online and not using offline mock provider, use live SSE stream!
+        if (isBackendOnline && selectedModel.provider !== 'Mock') {
+          // If conversation id is local, create a real backend conversation first
+          let backendChatId = convId;
+          if (convId.startsWith('conv-')) {
+            try {
+              const remote = await createBackendConversation(trimmed.slice(0, 32));
+              backendChatId = remote.id;
+            } catch {
+              // Fallback to local id
+            }
+          }
+
+          await streamBackendMessage(
+            backendChatId,
+            trimmed,
+            selectedModel.provider,
+            selectedModel.id,
+            controller.signal,
+            {
+              onDelta: (chunk) => {
+                accumulated += chunk;
+                setMessagesMap((prev) => {
+                  const list = prev[convId!] || [];
+                  return {
+                    ...prev,
+                    [convId!]: list.map((msg) =>
+                      msg.id === assistantMessageId ? { ...msg, content: accumulated } : msg
+                    ),
+                  };
+                });
+              },
+              onComplete: (data) => {
+                setMessagesMap((prev) => {
+                  const list = prev[convId!] || [];
+                  return {
+                    ...prev,
+                    [convId!]: list.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, status: 'complete' as const, content: data.content || accumulated }
+                        : msg
+                    ),
+                  };
+                });
+              },
+              onError: (err) => {
+                setMessagesMap((prev) => {
+                  const list = prev[convId!] || [];
+                  return {
+                    ...prev,
+                    [convId!]: list.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, status: 'error' as const, error: err.message }
+                        : msg
+                    ),
+                  };
+                });
+              },
+            }
+          );
+        } else {
+          // Fallback to client-side simulated generator
+          for await (const chunk of streamMockResponse(trimmed, selectedModel, controller.signal)) {
+            if (controller.signal.aborted) break;
+            accumulated += chunk;
+            setMessagesMap((prev) => {
+              const list = prev[convId!] || [];
+              return {
+                ...prev,
+                [convId!]: list.map((msg) =>
+                  msg.id === assistantMessageId ? { ...msg, content: accumulated } : msg
+                ),
+              };
+            });
+          }
+
+          if (!controller.signal.aborted) {
+            setMessagesMap((prev) => {
+              const list = prev[convId!] || [];
+              return {
+                ...prev,
+                [convId!]: list.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? { ...msg, status: 'complete' as const, content: accumulated }
+                    : msg
+                ),
+              };
+            });
+          }
         }
       } catch (err: unknown) {
         if (!controller.signal.aborted) {
@@ -230,7 +312,7 @@ export function useChat() {
         abortControllerRef.current = null;
       }
     },
-    [activeConversationId, isStreaming, messagesMap, selectedModel]
+    [activeConversationId, isBackendOnline, isStreaming, messagesMap, selectedModel]
   );
 
   const regenerateMessage = useCallback(
@@ -241,7 +323,6 @@ export function useChat() {
       const msgIndex = currentList.findIndex((m) => m.id === messageId);
       if (msgIndex === -1) return;
 
-      // Find the user prompt right before this assistant message
       let prompt = 'Please regenerate your answer.';
       for (let i = msgIndex - 1; i >= 0; i--) {
         if (currentList[i].role === 'user') {
@@ -250,7 +331,6 @@ export function useChat() {
         }
       }
 
-      // Reset this message to streaming
       setMessagesMap((prev) => {
         const list = prev[activeConversationId!] || [];
         return {
@@ -344,7 +424,6 @@ export function useChat() {
     [activeConversationId]
   );
 
-  // Clean up abort controller on unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
@@ -363,6 +442,7 @@ export function useChat() {
     isStreaming,
     searchQuery,
     setSearchQuery,
+    isBackendOnline,
     createNewChat,
     selectConversation,
     renameConversation,

@@ -26,6 +26,7 @@ export const App: React.FC = () => {
     regenerateMessage,
     setFeedback,
     activeConversationId,
+    isBackendOnline,
   } = useChat();
 
   // Keyboard shortcut: Ctrl+N or Cmd+N for new chat
@@ -66,6 +67,7 @@ export const App: React.FC = () => {
           theme={theme}
           onToggleTheme={toggleTheme}
           onOpenSidebar={() => setSidebarOpen(true)}
+          isBackendOnline={isBackendOnline}
         />
 
         <ChatArea

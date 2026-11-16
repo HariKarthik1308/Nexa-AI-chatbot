@@ -17,6 +17,7 @@ interface HeaderProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onOpenSidebar: () => void;
+  isBackendOnline?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -25,6 +26,7 @@ export const Header: React.FC<HeaderProps> = ({
   theme,
   onToggleTheme,
   onOpenSidebar,
+  isBackendOnline = false,
 }) => {
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -108,11 +110,18 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Mock Mode Pill */}
-        <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-          <Shield className="w-3 h-3" />
-          Phase 1 Mock Mode
-        </span>
+        {/* Connection Status Pill */}
+        {isBackendOnline ? (
+          <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Backend SSE Connected
+          </span>
+        ) : (
+          <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+            <Shield className="w-3 h-3" />
+            Prototype / Mock Mode
+          </span>
+        )}
       </div>
 
       {/* Right Actions */}

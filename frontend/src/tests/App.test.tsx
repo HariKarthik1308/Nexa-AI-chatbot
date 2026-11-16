@@ -3,10 +3,10 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from '../App';
 
 describe('NexaAI Phase 1 UI Foundation', () => {
-  it('renders branding and Phase 1 mock mode indicators', () => {
+  it('renders branding and mock mode indicators', () => {
     render(<App />);
     expect(screen.getAllByText('NexaAI').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Phase 1 Mock Mode/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Mock Mode/i).length).toBeGreaterThan(0);
   });
 
   it('renders initial conversations in the sidebar', () => {

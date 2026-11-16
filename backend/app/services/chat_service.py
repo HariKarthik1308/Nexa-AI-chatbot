@@ -1,6 +1,10 @@
+import asyncio
+import json
 import logging
-from typing import Optional
+from typing import AsyncGenerator, Optional
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import AsyncSessionLocal
 from app.core.prompts import NEXA_SYSTEM_INSTRUCTION
 from app.llm.base import LLMError, LLMMessage
 from app.llm.factory import get_llm_provider
@@ -9,6 +13,11 @@ from app.models.usage import UsageRecord
 from app.services.conversation_service import ConversationService
 
 logger = logging.getLogger("nexa_ai.services.chat")
+
+
+def format_sse(event: str, data: dict) -> str:
+    """Format SSE payload adhering to standard event stream format."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 class ChatService:
@@ -21,12 +30,10 @@ class ChatService:
         provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
     ) -> Message:
-        # 1. Enforce conversation ownership
         conversation = await ConversationService.get_conversation(db, conversation_id, user_id)
         if not conversation:
             raise ValueError("Conversation not found or access denied.")
 
-        # 2. Persist user message
         user_msg = await ConversationService.add_message(
             db=db,
             conversation_id=conversation_id,
@@ -36,11 +43,9 @@ class ChatService:
             status="complete",
         )
 
-        # 3. Retrieve LLM provider
         provider = get_llm_provider(provider_name)
         active_model = model_name or provider.default_model
 
-        # 4. Assemble bounded history context (latest 20 messages)
         history_msgs = conversation.messages[-20:]
         llm_messages = [
             LLMMessage(role=m.role, content=m.content)
@@ -48,7 +53,6 @@ class ChatService:
             if m.status == "complete"
         ]
 
-        # 5. Call LLM provider
         try:
             llm_response = await provider.generate_response(
                 messages=llm_messages,
@@ -56,7 +60,6 @@ class ChatService:
                 system_instruction=NEXA_SYSTEM_INSTRUCTION,
             )
 
-            # 6. Persist assistant response
             assistant_msg = await ConversationService.add_message(
                 db=db,
                 conversation_id=conversation_id,
@@ -70,7 +73,6 @@ class ChatService:
                 output_tokens=llm_response.output_tokens,
             )
 
-            # 7. Record usage metadata
             usage = UsageRecord(
                 user_id=user_id,
                 provider=provider.provider_name,
@@ -85,8 +87,7 @@ class ChatService:
 
         except LLMError as exc:
             logger.error(f"LLM generation failed: {exc.message}")
-            # Persist failed assistant message for audit and user feedback
-            failed_msg = await ConversationService.add_message(
+            await ConversationService.add_message(
                 db=db,
                 conversation_id=conversation_id,
                 user_id=user_id,
@@ -97,3 +98,149 @@ class ChatService:
                 model_name=active_model,
             )
             raise exc
+
+    @staticmethod
+    async def stream_message(
+        db: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+        content: str,
+        provider_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        request: Optional[Request] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Stream response tokens chunk-by-chunk using Server-Sent Events (SSE)."""
+        provider = get_llm_provider(provider_name)
+        active_model = model_name or provider.default_model
+        assistant_message_id = None
+        accumulated_text = ""
+        is_aborted = False
+
+        # Phase A: Initial setup & user message insertion in database
+        conversation = await ConversationService.get_conversation(db, conversation_id, user_id)
+        if not conversation:
+            yield format_sse("error", {"code": "NOT_FOUND", "message": "Conversation not found."})
+            return
+
+        # Save user prompt
+        await ConversationService.add_message(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="user",
+            content=content,
+            status="complete",
+        )
+
+        # Create placeholder assistant message
+        assistant_msg = await ConversationService.add_message(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="assistant",
+            content="",
+            status="streaming",
+            model_provider=provider.provider_name,
+            model_name=active_model,
+        )
+        assistant_message_id = assistant_msg.id
+
+        # Context history
+        history_msgs = conversation.messages[-20:]
+        llm_messages = [
+            LLMMessage(role=m.role, content=m.content)
+            for m in history_msgs
+            if m.status == "complete"
+        ]
+
+        # Announce stream start
+        yield format_sse(
+            "message_start",
+            {
+                "messageId": assistant_message_id,
+                "conversationId": conversation_id,
+                "role": "assistant",
+                "model": active_model,
+                "provider": provider.provider_name,
+            },
+        )
+
+        # Phase B: Stream tokens from provider
+        try:
+            token_stream = provider.generate_stream(
+                messages=llm_messages,
+                model=active_model,
+                system_instruction=NEXA_SYSTEM_INSTRUCTION,
+            )
+
+            async for chunk in token_stream:
+                # Check for client cancellation/disconnection
+                if request and await request.is_disconnected():
+                    logger.info(f"Client disconnected in-flight for message {assistant_message_id}")
+                    is_aborted = True
+                    break
+
+                accumulated_text += chunk
+                yield format_sse("content_delta", {"delta": chunk})
+
+        except LLMError as exc:
+            logger.error(f"Stream error for message {assistant_message_id}: {exc.message}")
+            if assistant_message_id:
+                msg = await db.get(Message, assistant_message_id)
+                if msg:
+                    msg.status = "failed"
+                    msg.content = accumulated_text or f"Error: {exc.message}"
+                    await db.commit()
+
+            yield format_sse("error", {"code": "PROVIDER_ERROR", "message": exc.message})
+            return
+        except Exception as exc:
+            logger.error(f"Unexpected stream error: {str(exc)}", exc_info=True)
+            if assistant_message_id:
+                msg = await db.get(Message, assistant_message_id)
+                if msg:
+                    msg.status = "failed"
+                    msg.content = accumulated_text or "Error: Unexpected stream failure."
+                    await db.commit()
+
+            yield format_sse("error", {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred during streaming."})
+            return
+
+        # Phase C: Finalize message state in database
+        final_status = "partial" if is_aborted else "complete"
+        estimated_output_tokens = len(accumulated_text.split())
+
+        if assistant_message_id:
+            msg = await db.get(Message, assistant_message_id)
+            if msg:
+                msg.status = final_status
+                msg.content = accumulated_text
+                msg.output_tokens = estimated_output_tokens
+                await db.commit()
+
+        # Record token usage
+        usage = UsageRecord(
+            user_id=user_id,
+            provider=provider.provider_name,
+            model=active_model,
+            input_tokens=len(content.split()),
+            output_tokens=estimated_output_tokens,
+        )
+        db.add(usage)
+        await db.commit()
+
+        if not is_aborted:
+            yield format_sse(
+                "message_complete",
+                {
+                    "messageId": assistant_message_id,
+                    "status": "complete",
+                    "content": accumulated_text,
+                },
+            )
+            yield format_sse(
+                "usage",
+                {
+                    "estimatedOutputTokens": estimated_output_tokens,
+                },
+            )

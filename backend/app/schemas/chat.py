@@ -26,6 +26,12 @@ class ConversationRead(ConversationBase):
     model_config = {"from_attributes": True}
 
 
+class MessageCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=16000)
+    provider: Optional[str] = Field(None, max_length=64)
+    model: Optional[str] = Field(None, max_length=128)
+
+
 class ConversationListItem(ConversationBase):
     id: str
     user_id: str

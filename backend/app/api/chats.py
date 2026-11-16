@@ -2,13 +2,23 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
+from app.llm.base import (
+    LLMAuthError,
+    LLMError,
+    LLMInvalidRequestError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+)
 from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
     ConversationListItem,
     ConversationRead,
     ConversationUpdate,
+    MessageCreateRequest,
 )
+from app.schemas.message import MessageRead
+from app.services.chat_service import ChatService
 from app.services.conversation_service import ConversationService
 
 router = APIRouter()
@@ -95,3 +105,40 @@ async def delete_chat(
             detail="Conversation not found",
         )
     return None
+
+
+@router.post(
+    "/{chat_id}/messages",
+    response_model=MessageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def send_chat_message(
+    chat_id: str,
+    payload: MessageCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Send a message to a conversation and get the generated LLM response."""
+    try:
+        assistant_message = await ChatService.send_message(
+            db=db,
+            conversation_id=chat_id,
+            user_id=current_user.id,
+            content=payload.content,
+            provider_name=payload.provider,
+            model_name=payload.model,
+        )
+        return assistant_message
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except LLMAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message)
+    except LLMRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=exc.message)
+    except LLMInvalidRequestError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message)
+    except LLMTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=exc.message)
+    except LLMError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
+

@@ -244,3 +244,157 @@ class ChatService:
                     "estimatedOutputTokens": estimated_output_tokens,
                 },
             )
+
+    @staticmethod
+    async def send_langgraph_message(
+        db: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+        content: str,
+        provider_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> Message:
+        """Process message through multi-node LangGraph agent workflow."""
+        from app.graph.service import graph_service
+
+        conversation = await ConversationService.get_conversation(db, conversation_id, user_id)
+        if not conversation:
+            raise ValueError("Conversation not found or access denied.")
+
+        await ConversationService.add_message(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="user",
+            content=content,
+            status="complete",
+        )
+
+        history_msgs = conversation.messages[-20:]
+        formatted_history = [
+            {"role": m.role, "content": m.content}
+            for m in history_msgs
+            if m.status == "complete"
+        ]
+
+        result = await graph_service.run(
+            messages=formatted_history,
+            user_id=user_id,
+            chat_id=conversation_id,
+            provider_name=provider_name or "gemini",
+            model_name=model_name,
+        )
+
+        tokens = result.get("token_usage", {})
+        assistant_message = await ConversationService.add_message(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="assistant",
+            content=result["content"],
+            model_name=model_name or "langgraph-agent",
+            model_provider="LangGraph",
+            input_tokens=tokens.get("input_tokens", 0),
+            output_tokens=tokens.get("output_tokens", 0),
+            status="complete",
+        )
+
+        return assistant_message
+
+    @staticmethod
+    async def stream_langgraph_message(
+        db: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+        content: str,
+        provider_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        request: Optional[Request] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Stream message processed through LangGraph agent workflow via SSE."""
+        from app.graph.service import graph_service
+
+        conversation = await ConversationService.get_conversation(db, conversation_id, user_id)
+        if not conversation:
+            yield format_sse("error", {"code": "NOT_FOUND", "message": "Conversation not found or access denied."})
+            return
+
+        user_msg = await ConversationService.add_message(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="user",
+            content=content,
+            status="complete",
+        )
+
+        assistant_msg = await ConversationService.add_message(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="assistant",
+            content="",
+            model_name=model_name or "langgraph-agent",
+            model_provider="LangGraph",
+            status="streaming",
+        )
+
+        yield format_sse(
+            "message_start",
+            {
+                "messageId": assistant_msg.id,
+                "conversationId": conversation_id,
+                "role": "assistant",
+                "model": assistant_msg.model,
+                "provider": "LangGraph",
+            },
+        )
+
+        history_msgs = conversation.messages[-20:]
+        formatted_history = [
+            {"role": m.role, "content": m.content}
+            for m in history_msgs
+            if m.status == "complete"
+        ]
+
+        accumulated_text = ""
+        is_aborted = False
+
+        try:
+            async for event in graph_service.stream(
+                messages=formatted_history,
+                user_id=user_id,
+                chat_id=conversation_id,
+                provider_name=provider_name or "gemini",
+                model_name=model_name,
+            ):
+                if request and await request.is_disconnected():
+                    is_aborted = True
+                    break
+
+                ev_type = event.get("event")
+                ev_data = event.get("data", {})
+                if ev_type == "content_delta":
+                    accumulated_text += ev_data.get("delta", "")
+                yield format_sse(ev_type, ev_data)
+
+        except Exception as exc:
+            logger.error("LangGraph streaming failed: %s", exc, exc_info=True)
+            msg = await db.get(Message, assistant_msg.id)
+            if msg:
+                msg.status = "failed"
+                msg.content = accumulated_text or "Error in LangGraph workflow."
+                await db.commit()
+            yield format_sse("error", {"code": "LANGGRAPH_ERROR", "message": str(exc)})
+            return
+
+        final_status = "partial" if is_aborted else "complete"
+        msg = await db.get(Message, assistant_msg.id)
+        if msg:
+            msg.status = final_status
+            msg.content = accumulated_text
+            msg.output_tokens = len(accumulated_text.split())
+            await db.commit()
+
+        if not is_aborted:
+            yield format_sse("usage", {"estimatedOutputTokens": len(accumulated_text.split())})

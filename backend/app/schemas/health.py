@@ -8,3 +8,11 @@ class HealthResponse(BaseModel):
     version: str
     database: str
     timestamp: datetime
+
+
+class ReadinessResponse(BaseModel):
+    status: str
+    database: str
+    llm_configured: bool
+    langgraph: str
+    timestamp: datetime

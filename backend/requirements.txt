@@ -16,3 +16,5 @@ google-genai>=0.8.0
 openai>=1.54.0
 pytest>=8.3.3
 pytest-asyncio>=0.24.0
+langgraph>=0.2.0
+langchain-core>=0.3.0

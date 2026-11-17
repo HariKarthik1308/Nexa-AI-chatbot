@@ -1,6 +1,6 @@
 # NexaAI — Quality & Safety Evaluation Benchmark Report
 
-- **Evaluation Date**: 2026-11-17T03:52:31Z
+- **Evaluation Date**: 2026-11-17T04:06:56Z
 - **Model Provider**: MockEvaluatedProvider
 - **Active Model**: `mock-model`
 - **Total Benchmark Prompts**: 5

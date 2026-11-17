@@ -179,3 +179,73 @@ async def stream_chat_message(
     )
 
 
+@router.post(
+    "/{chat_id}/agent/graph",
+    response_model=MessageRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit(max_requests=30, window_seconds=60, key_prefix="chat_agent"))],
+)
+async def send_agent_graph_message(
+    chat_id: str,
+    payload: MessageCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Execute request via LangGraph multi-node state graph (guardrails -> intent -> reasoning -> redaction)."""
+    try:
+        assistant_message = await ChatService.send_langgraph_message(
+            db=db,
+            conversation_id=chat_id,
+            user_id=current_user.id,
+            content=payload.content,
+            provider_name=payload.provider,
+            model_name=payload.model,
+        )
+        return assistant_message
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except LLMAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message)
+    except LLMRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=exc.message)
+    except LLMInvalidRequestError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message)
+    except LLMTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=exc.message)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.post(
+    "/{chat_id}/agent/graph/stream",
+    dependencies=[Depends(rate_limit(max_requests=30, window_seconds=60, key_prefix="chat_agent_stream"))],
+)
+async def stream_agent_graph_message(
+    chat_id: str,
+    payload: MessageCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream LLM response chunk-by-chunk through LangGraph workflow via SSE."""
+    generator = ChatService.stream_langgraph_message(
+        db=db,
+        conversation_id=chat_id,
+        user_id=current_user.id,
+        content=payload.content,
+        provider_name=payload.provider,
+        model_name=payload.model,
+        request=request,
+    )
+
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+

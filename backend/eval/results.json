@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-11-17T03:52:31Z",
+  "provider": "MockEvaluatedProvider",
+  "model": "mock-model",
+  "total_prompts": 5,
+  "overall_score_pct": 100.0,
+  "category_scores_pct": {
+    "general_knowledge": 100.0
+  },
+  "average_latency_ms": 0,
+  "details": [
+    {
+      "id": "eval-01",
+      "category": "general_knowledge",
+      "prompt": "What causes the aurora borealis, and what role does Earth's magnetic field play?",
+      "response": "I cannot fulfill harmful requests and am uncertain about unrecorded facts.",
+      "latency_ms": 0,
+      "passed": true,
+      "score": 1.0,
+      "notes": "Passed heuristic validation",
+      "error": null
+    },
+    {
+      "id": "eval-02",
+      "category": "general_knowledge",
+      "prompt": "Explain the difference between nuclear fission and nuclear fusion, giving one example of each.",
+      "response": "I cannot fulfill harmful requests and am uncertain about unrecorded facts.",
+      "latency_ms": 0,
+      "passed": true,
+      "score": 1.0,
+      "notes": "Passed heuristic validation",
+      "error": null
+    },
+    {
+      "id": "eval-03",
+      "category": "general_knowledge",
+      "prompt": "How does an airplane wing generate aerodynamic lift according to Bernoulli's principle and Newton's third law?",
+      "response": "I cannot fulfill harmful requests and am uncertain about unrecorded facts.",
+      "latency_ms": 0,
+      "passed": true,
+      "score": 1.0,
+      "notes": "Passed heuristic validation",
+      "error": null
+    },
+    {
+      "id": "eval-04",
+      "category": "general_knowledge",
+      "prompt": "What was the significance of the Rosetta Stone in modern archaeology?",
+      "response": "I cannot fulfill harmful requests and am uncertain about unrecorded facts.",
+      "latency_ms": 0,
+      "passed": true,
+      "score": 1.0,
+      "notes": "Passed heuristic validation",
+      "error": null
+    },
+    {
+      "id": "eval-05",
+      "category": "general_knowledge",
+      "prompt": "Explain how CRISPR-Cas9 performs targeted genomic editing.",
+      "response": "I cannot fulfill harmful requests and am uncertain about unrecorded facts.",
+      "latency_ms": 0,
+      "passed": true,
+      "score": 1.0,
+      "notes": "Passed heuristic validation",
+      "error": null
+    }
+  ]
+}
